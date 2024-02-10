@@ -1,7 +1,7 @@
 use std::ops::{ Div, Add, Mul, Sub, Index };
 use std::ops::Range;
 use std::rc::Rc;
-use ordered_float::{ OrderedFloat, Float };
+use ordered_float::OrderedFloat;
 use rand::Rng;
 
 #[derive(Copy, Clone)]
@@ -92,7 +92,16 @@ impl Vec3 {
     pub fn near_zero(&self) -> bool {
         let s = 1e-8;
         self.e[0].abs() < s && self.e[1].abs() < s && self.e[2].abs() < s
-    }    
+    }   
+    
+    pub fn random_in_unit_disk() -> Self {
+        loop {
+            let p = Vec3::new(rand::thread_rng().gen_range(-1.0..1.0), rand::thread_rng().gen_range(-1.0..1.0), 0.0);
+            if p.length_squared() < 1.0 {
+                return p
+            }
+        }
+    }
 }
 
 impl Add<&Vec3> for Vec3 {
@@ -167,9 +176,37 @@ pub fn write_colour(pixel_color: &Vec3, samples_per_pixel: i32) {
     println!("{} {} {}", (256.0 * clamp(r, &intensity)) as i32, (256.0 * clamp(g, &intensity)) as i32, (256.0 * clamp(b, &intensity)) as i32);
 }
 
+pub fn clamp(t: f64, range : &Range<OrderedFloat<f64>>) -> f64 {
+    if t < range.start.into_inner() {
+        range.start.into_inner()
+    } else if t > range.end.into_inner() {
+        range.end.into_inner()
+    } else {
+        t
+    }
+}
+
 pub struct Ray {
     pub orig: Point3,
     pub dir: Vec3
+}
+
+impl Ray {
+    pub fn new(origin: Point3, direction: Vec3) -> Self {
+        Self { orig: origin, dir: direction }
+    }
+
+    pub fn origin(&self) -> &Point3 {
+        &self.orig
+    }
+
+    pub fn direction(&self) -> &Vec3 {
+        &self.dir
+    }
+
+    pub fn at(&self, t: f64) -> Point3 {
+        self.orig + &( (self.dir * &Vec3::new(t, t, t)))
+    }
 }
 
 pub struct HitRecord {
@@ -232,6 +269,13 @@ impl Dielectric {
     pub fn new(index_of_refraction: f64) -> Self {
         Self { index_of_refraction }
     }
+
+    // Uses Schlick's approximation for reflectance.
+    // see https://en.wikipedia.org/wiki/Schlick%27s_approximation
+    fn reflectance(cos_theta : f64, refraction_ratio : f64) -> f64 {
+        let r0 = ((1.0 - refraction_ratio) / (1.0 + refraction_ratio)).powi(2);
+        r0 + (1.0 - r0) * (1.0 - cos_theta).powi(5)
+    }
 }
 
 impl Material for Dielectric {
@@ -241,19 +285,12 @@ impl Material for Dielectric {
         let cos_theta = f64::min(1.0, unit_direction.dot(&hit_record.normal) * -1.0);
         let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
         let cannot_refract = refraction_ratio * sin_theta > 1.0;
-        let direction = if cannot_refract {
+        let direction = if cannot_refract || Self::reflectance(cos_theta, refraction_ratio) > rand::thread_rng().gen_range(0.0..1.0){
             unit_direction.reflect(&hit_record.normal)
         } else {
             unit_direction.refract(&hit_record.normal, refraction_ratio)
         };
         Some((Colour::new(1.0, 1.0, 1.0), Ray::new(hit_record.p.clone(), direction)))
-    }
-}
-
-impl HitRecord {
-    fn set_face_normal(&mut self, ray: &Ray, outward_normal: &Vec3) {
-        self.front_face = ray.direction().dot(outward_normal) < 0.0;
-        self.normal = if self.front_face { outward_normal.clone() } else { outward_normal.clone() * -1.0 };
     }
 }
 
@@ -293,15 +330,16 @@ impl Hittable for Sphere {
             }
         }
         let position = ray.at(root);
-        Some( HitRecord {
+        let unit_normal_to_sphere = &(position - &self.center) / self.radius;
+        let front_face = ray.direction().dot(&unit_normal_to_sphere) < 0.0;
+        let normal = if front_face { unit_normal_to_sphere.clone() } else { unit_normal_to_sphere.clone() * -1.0 };
+
+        Some(HitRecord {
             t : root,
             p : position,
-            normal : &(position - &self.center) / self.radius,
-            front_face: false,
+            normal : normal,
+            front_face: front_face,
             material: self.material.clone()
-        }).map( |mut this| {
-            this.set_face_normal(ray, &(&(this.p - &self.center) / self.radius));
-            this
         })
     }
 }
@@ -317,32 +355,5 @@ impl <T> Hittable for Vec<T> where T: Hittable {
             }
         }
         return hit;
-    }
-}
-impl Ray {
-    pub fn new(origin: Point3, direction: Vec3) -> Self {
-        Self { orig: origin, dir: direction }
-    }
-
-    pub fn origin(&self) -> &Point3 {
-        &self.orig
-    }
-
-    pub fn direction(&self) -> &Vec3 {
-        &self.dir
-    }
-
-    pub fn at(&self, t: f64) -> Point3 {
-        self.orig + &( (self.dir * &Vec3::new(t, t, t)))
-    }
-}
-
-pub fn clamp(t: f64, range : &Range<OrderedFloat<f64>>) -> f64 {
-    if t < range.start.into_inner() {
-        range.start.into_inner()
-    } else if t > range.end.into_inner() {
-        range.end.into_inner()
-    } else {
-        t
     }
 }
