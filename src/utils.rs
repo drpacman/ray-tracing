@@ -14,15 +14,6 @@ impl Vec3 {
         Self { e: [e0, e1, e2] }
     }
 
-    pub fn random() -> Vec3 {
-        Vec3::random_in_range(0.0, 1.0)
-    }
-    
-    pub fn random_in_range(min: f64, max:f64) -> Vec3 {
-        let mut rng = rand::thread_rng();
-        Vec3::new(rng.gen_range(min..max), rng.gen_range(min..max), rng.gen_range(min..max))
-    }
-    
     pub fn x(&self) -> f64 { self.e[0] }
     pub fn y(&self) -> f64 { self.e[1] }
     pub fn z(&self) -> f64 { self.e[2] }
@@ -39,6 +30,48 @@ impl Vec3 {
         self.e[0] * self.e[0] + self.e[1] * self.e[1] + self.e[2] * self.e[2]
     }
 
+    pub fn near_zero(&self) -> bool {
+        let s = 1e-8;
+        self.e[0].abs() < s && self.e[1].abs() < s && self.e[2].abs() < s
+    } 
+    
+    pub fn dot(&self, rhs: &Self) -> f64 {
+        self.e[0] * rhs.e[0] + self.e[1] * rhs.e[1] + self.e[2] * rhs.e[2]
+    }
+
+    pub fn cross(&self, rhs: &Self) -> Self {
+        Self::new(
+            self.e[1] * rhs.e[2] - self.e[2] * rhs.e[1],
+            self.e[2] * rhs.e[0] - self.e[0] * rhs.e[2],
+            self.e[0] * rhs.e[1] - self.e[1] * rhs.e[0]
+        )
+    }
+
+    pub fn unit_vector(&self) -> Self {
+        self / self.length()
+    }
+        
+    pub fn reflect(&self, normal: &Vec3) -> Self {
+        *self - &(*normal * self.dot(normal) * 2.0)
+    }
+
+    // See https://raytracing.github.io/books/RayTracingInOneWeekend.html#dielectrics/snell'slaw
+    pub fn refract(&self, normal: &Vec3, etai_over_etat: f64) -> Self {
+        let cos_theta = f64::min(1.0, (*self * -1.0).dot(normal));
+        let ray_out_perpendicular = (*self + &((*normal * cos_theta))) * etai_over_etat;
+        let ray_out_parallel = *normal * -1.0*f64::abs(1.0 - ray_out_perpendicular.length_squared()).sqrt();
+        ray_out_perpendicular + &ray_out_parallel
+    }
+
+    pub fn random() -> Vec3 {
+        Vec3::random_in_range(0.0, 1.0)
+    }
+    
+    pub fn random_in_range(min: f64, max:f64) -> Vec3 {
+        let mut rng = rand::thread_rng();
+        Vec3::new(rng.gen_range(min..max), rng.gen_range(min..max), rng.gen_range(min..max))
+    }
+    
     pub fn random_in_unit_sphere() -> Vec3 {
         loop {
             let p = Vec3::random_in_range(-1.0, 1.0);
@@ -62,38 +95,6 @@ impl Vec3 {
         }
     }
 
-    pub fn dot(&self, rhs: &Self) -> f64 {
-        self.e[0] * rhs.e[0] + self.e[1] * rhs.e[1] + self.e[2] * rhs.e[2]
-    }
-
-    pub fn cross(&self, rhs: &Self) -> Self {
-        Self::new(
-            self.e[1] * rhs.e[2] - self.e[2] * rhs.e[1],
-            self.e[2] * rhs.e[0] - self.e[0] * rhs.e[2],
-            self.e[0] * rhs.e[1] - self.e[1] * rhs.e[0]
-        )
-    }
-
-    pub fn reflect(&self, normal: &Vec3) -> Self {
-        *self - &(*normal * self.dot(normal) * 2.0)
-    }
-
-    pub fn refract(&self, normal: &Vec3, etai_over_etat: f64) -> Self {
-        let cos_theta = f64::min(1.0, (*self * -1.0).dot(normal));
-        let ray_out_perpendicular = (*self + &((*normal * cos_theta))) * etai_over_etat;
-        let ray_out_parallel = *normal * -1.0*f64::abs(1.0 - ray_out_perpendicular.length_squared()).sqrt();
-        ray_out_perpendicular + &ray_out_parallel
-    }
-
-    pub fn unit_vector(&self) -> Self {
-        self / self.length()
-    }
-
-    pub fn near_zero(&self) -> bool {
-        let s = 1e-8;
-        self.e[0].abs() < s && self.e[1].abs() < s && self.e[2].abs() < s
-    }   
-    
     pub fn random_in_unit_disk() -> Self {
         loop {
             let p = Vec3::new(rand::thread_rng().gen_range(-1.0..1.0), rand::thread_rng().gen_range(-1.0..1.0), 0.0);
@@ -101,7 +102,7 @@ impl Vec3 {
                 return p
             }
         }
-    }
+    }   
 }
 
 impl Add<&Vec3> for Vec3 {
@@ -221,6 +222,11 @@ pub trait Material {
     fn scatter(&self, ray: &Ray, hit_record: &HitRecord) -> Option<(Colour, Ray)>;
 }
 
+/*
+Albedo - represents the _fraction_ of light that is reflected by a body or surface. 
+It is commonly used in astronomy to describe the reflective properties of 
+planets, satellites, and asteroids.
+ */
 pub struct Lambertian {
     pub albedo: Colour
 }
@@ -255,12 +261,18 @@ impl Metal {
 
 impl Material for Metal {    
     fn scatter(&self, ray: &Ray, hit_record: &HitRecord) -> Option<(Colour, Ray)> {
-        let reflected = ray.dir.unit_vector().reflect(&hit_record.normal);
-        let scattered = Ray::new(hit_record.p.clone(), reflected + &(Vec3::random_in_unit_sphere() * self.fuzz));
+        // For mirrored reflection
+        // See https://raytracing.github.io/books/RayTracingInOneWeekend.html#metal/mirroredlightreflection    
+        let mirror_reflected_ray = ray.dir.unit_vector().reflect(&hit_record.normal);
+        // The fuzz parameter is used to simulate the roughness of the metal. A fuzz of zero is a perfect mirror.
+        // See https://raytracing.github.io/books/RayTracingInOneWeekend.html#metal/fuzzyreflection
+        let fuzzed_ray = mirror_reflected_ray + &(Vec3::random_in_unit_sphere() * self.fuzz);
+        let scattered = Ray::new(hit_record.p.clone(), fuzzed_ray);
         Some((self.albedo.clone(), scattered))
     }
 }
 
+// See https://raytracing.github.io/books/RayTracingInOneWeekend.html#dielectrics
 pub struct Dielectric {
     pub index_of_refraction: f64
 }
@@ -280,10 +292,15 @@ impl Dielectric {
 
 impl Material for Dielectric {
     fn scatter(&self, ray: &Ray, hit_record: &HitRecord) -> Option<(Colour, Ray)> {
+        // Example refractive indices (typically air = 1.0, glass = 1.3–1.7, diamond = 2.4)
+        // assuming front face we are going from air -> material and backface we are going from material to air
+        // refraction_ratio is the ratio of the refractive indices of the two materials.
         let refraction_ratio = if hit_record.front_face { 1.0 / self.index_of_refraction } else { self.index_of_refraction };
         let unit_direction = ray.dir.unit_vector();
         let cos_theta = f64::min(1.0, unit_direction.dot(&hit_record.normal) * -1.0);
         let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+        // when the ray is in the material with the higher refractive index, depending on the value of sin theta
+        // there can be no real solution to Snell’s law. In those cases there is no refraction possible.
         let cannot_refract = refraction_ratio * sin_theta > 1.0;
         let direction = if cannot_refract || Self::reflectance(cos_theta, refraction_ratio) > rand::thread_rng().gen_range(0.0..1.0){
             unit_direction.reflect(&hit_record.normal)
@@ -331,6 +348,8 @@ impl Hittable for Sphere {
         }
         let position = ray.at(root);
         let unit_normal_to_sphere = &(position - &self.center) / self.radius;
+        // if angle to the normal is between 90 and and 270, we are on the front face.
+        // cos is negative for angles between 90 and 270.
         let front_face = ray.direction().dot(&unit_normal_to_sphere) < 0.0;
         let normal = if front_face { unit_normal_to_sphere.clone() } else { unit_normal_to_sphere.clone() * -1.0 };
 
