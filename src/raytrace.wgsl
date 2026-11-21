@@ -9,6 +9,9 @@
 const PI: f32 = 3.14159265358979;
 const T_MIN: f32 = 0.001;
 const T_INFINITY: f32 = 3.4e38;
+// Russian roulette (see ray_colour). Must match the constants in src/camera.rs.
+const RR_MIN_DEPTH: u32 = 3u;
+const RR_MAX_SURVIVAL: f32 = 0.95;
 
 // --- Data shared with the host (layouts must match src/gpu.rs) ---------------
 
@@ -326,6 +329,16 @@ fn ray_colour(initial: Ray, state: ptr<function, u32>) -> vec3f {
         let s = scatter(r, rec, state);
         throughput *= s.attenuation;
         r = s.ray;
+
+        // Russian roulette: randomly end low-throughput paths, scaling up the
+        // survivors by 1/p so the average is unchanged (see camera.rs).
+        if (depth >= RR_MIN_DEPTH) {
+            let p = min(max(throughput.r, max(throughput.g, throughput.b)), RR_MAX_SURVIVAL);
+            if (rand_f32(state) >= p) {
+                return vec3f(0.0);
+            }
+            throughput /= p;
+        }
     }
     return vec3f(0.0);
 }

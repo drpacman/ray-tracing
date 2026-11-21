@@ -21,6 +21,16 @@ impl Aabb {
         Self { min: box0.min.min(&box1.min), max: box0.max.max(&box1.max) }
     }
 
+    // Index (0 = x, 1 = y, 2 = z) of the box's longest side.
+    pub fn longest_axis(&self) -> usize {
+        let size = self.max - &self.min;
+        if size.x() > size.y() {
+            if size.x() > size.z() { 0 } else { 2 }
+        } else {
+            if size.y() > size.z() { 1 } else { 2 }
+        }
+    }
+
     // The "slab" method: for each axis, compute the t interval over which the
     // ray is between the two planes bounding the box on that axis. The ray hits
     // the box only if those intervals all overlap (with each other and the

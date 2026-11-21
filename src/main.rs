@@ -135,7 +135,7 @@ fn main() {
     // A fixed seed makes the scene (and BVH) the same on every run.
     let mut rng = Rng::new(42);
     let (mut scene, camera_opts) = random_spheres(&mut rng);
-    scene.build_bvh(&mut rng);
+    scene.build_bvh();
     let camera = Camera::initialize(camera_opts);
     // GPU by default; pass --cpu to render with the CPU path instead.
     if std::env::args().any(|arg| arg == "--cpu") {

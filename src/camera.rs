@@ -32,6 +32,13 @@ pub struct Camera {
     pub(crate) defocus_angle: f32
 }
 
+// Russian roulette: from this bounce on, paths may be randomly terminated.
+// Must match RR_MIN_DEPTH / RR_MAX_SURVIVAL in raytrace.wgsl.
+const RR_MIN_DEPTH: u8 = 3;
+// Cap on the survival probability, so even paths that lose no energy
+// (e.g. bouncing inside glass) eventually end.
+const RR_MAX_SURVIVAL: f32 = 0.95;
+
 fn degrees_to_radians(degrees: f32) -> f32 {
     degrees * std::f32::consts::PI / 180.0
 }
@@ -159,7 +166,7 @@ impl Camera {
     fn ray_colour(ray: Ray, max_depth: u8, scene: &Scene, rng: &mut Rng) -> Colour {
         let mut ray = ray;
         let mut throughput = Colour::new(1.0, 1.0, 1.0);
-        for _ in 0..max_depth {
+        for depth in 0..max_depth {
             match scene.hit(&ray, 0.001, f32::INFINITY) {
                 Some(record) => {
                     let material = &scene.materials[record.material as usize];
@@ -167,6 +174,18 @@ impl Camera {
                         Some((attenuation, scattered_ray)) => {
                             throughput = throughput * &attenuation;
                             ray = scattered_ray;
+
+                            // Russian roulette. A path whose throughput is low can
+                            // only add a little light, so stop it with probability
+                            // 1 - p. To keep the average right, survivors are scaled
+                            // up by 1/p: the expected value is p * (L/p) + (1-p) * 0 = L.
+                            if depth >= RR_MIN_DEPTH {
+                                let p = throughput.r().max(throughput.g()).max(throughput.b()).min(RR_MAX_SURVIVAL);
+                                if rng.next_f32() >= p {
+                                    return Colour::new(0.0, 0.0, 0.0);
+                                }
+                                throughput = throughput * (1.0 / p);
+                            }
                         }
                         None => return Colour::new(0.0, 0.0, 0.0)
                     }

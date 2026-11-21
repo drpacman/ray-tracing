@@ -1,6 +1,5 @@
 use crate::bvh::{ self, BvhNode };
 use crate::material::{ Material, Texture };
-use crate::rng::Rng;
 use crate::utils::{ Colour, HitRecord, Point3, Ray, Sphere, Vec3 };
 
 // Everything the renderer needs, as flat arrays that refer to each other by
@@ -60,8 +59,8 @@ impl Scene {
     }
 
     // Call once all spheres are added. Reorders `spheres`.
-    pub fn build_bvh(&mut self, rng: &mut Rng) {
-        self.bvh = bvh::build(&mut self.spheres, rng);
+    pub fn build_bvh(&mut self) {
+        self.bvh = bvh::build(&mut self.spheres);
     }
 
     // --- Rendering ------------------------------------------------------
