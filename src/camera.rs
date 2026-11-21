@@ -1,6 +1,9 @@
 use crate::utils::{ Vec3, Ray, Hittable, Colour, write_colour };
 use ordered_float::OrderedFloat;
 use rand::Rng;
+use rayon::prelude::*;
+use std::io::{self, BufWriter, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct CameraOpts {
     pub aspect_ratio : f64,
@@ -36,19 +39,37 @@ fn degrees_to_radians(degrees: f64) -> f64 {
 impl Camera {
 
     pub fn render(&self, world: &dyn Hittable) {
-        // write to provider output stream, not println
-        println!("P3\n{} {}\n255", self.image_width, self.image_height);
-        for i in 0..self.image_height{
-            eprintln!("\rScanlines remaining: {}", self.image_height - i);
-            for j in 0..self.image_width {
-                let mut pixel_colour = Colour::new(0.0,0.0,0.0);
-                for _ in 0..self.samples_per_pixel {
-                    let r = self.get_ray(i, j);
-                    pixel_colour = pixel_colour + &Camera::ray_colour(&r, self.max_depth, world);
-                }
-                write_colour(&pixel_colour, self.samples_per_pixel);
-            }
+        // Render scanlines in parallel across all cores. Rayon's collect()
+        // preserves order, so rows come back top-to-bottom.
+        let rows_done = AtomicUsize::new(0);
+        let rows: Vec<Vec<Colour>> = (0..self.image_height)
+            .into_par_iter()
+            .map(|i| {
+                let row = (0..self.image_width)
+                    .map(|j| {
+                        let mut pixel_colour = Colour::new(0.0, 0.0, 0.0);
+                        for _ in 0..self.samples_per_pixel {
+                            let r = self.get_ray(i, j);
+                            pixel_colour = pixel_colour + &Camera::ray_colour(&r, self.max_depth, world);
+                        }
+                        pixel_colour
+                    })
+                    .collect();
+                let done = rows_done.fetch_add(1, Ordering::Relaxed) + 1;
+                eprint!("\rScanlines remaining: {:5}", self.image_height as usize - done);
+                row
+            })
+            .collect();
+        eprintln!("\rDone.                     ");
+
+        // Write the image once, through a buffered, locked stdout.
+        let stdout = io::stdout();
+        let mut out = BufWriter::new(stdout.lock());
+        writeln!(out, "P3\n{} {}\n255", self.image_width, self.image_height).unwrap();
+        for pixel_colour in rows.iter().flatten() {
+            write_colour(&mut out, pixel_colour, self.samples_per_pixel).unwrap();
         }
+        out.flush().unwrap();
     }
 
     fn defocus_disk_sample(&self) -> Vec3 {

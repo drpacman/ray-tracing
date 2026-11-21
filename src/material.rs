@@ -1,8 +1,8 @@
 use crate::utils::{ Vec3, Ray, HitRecord, Colour };
 use rand::Rng;
-use std::rc::Rc;
+use std::sync::Arc;
 use image::{GenericImageView, Pixel};
-pub trait Material {
+pub trait Material: Send + Sync {
     fn scatter(&self, ray: &Ray, hit_record: &HitRecord) -> Option<(Colour, Ray)>;
 }
 
@@ -12,15 +12,15 @@ It is commonly used in astronomy to describe the reflective properties of
 planets, satellites, and asteroids.
  */
 pub struct Lambertian {
-    pub albedo: Rc<dyn Texture>
+    pub albedo: Arc<dyn Texture>
 }
 
 impl Lambertian {
     pub fn from_colour(albedo: Colour) -> Self {
-        Self::new(Rc::new(SolidColour::new(albedo)))
+        Self::new(Arc::new(SolidColour::new(albedo)))
     }
 
-    pub fn new(albedo: Rc<dyn Texture>) -> Self {
+    pub fn new(albedo: Arc<dyn Texture>) -> Self {
         Self { albedo }
     }
 }
@@ -100,7 +100,7 @@ impl Material for Dielectric {
     }
 }
 
-pub trait Texture {
+pub trait Texture: Send + Sync {
     fn value(&self, u: f64, v: f64, p: &Vec3) -> Colour;
 }
 

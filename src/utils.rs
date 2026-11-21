@@ -1,9 +1,11 @@
 use std::ops::{ Div, Add, Mul, Sub, Index };
 use std::ops::Range;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::io::{self, Write};
 use ordered_float::OrderedFloat;
 use rand::Rng;
 use crate::material::Material;
+use crate::aabb::Aabb;
 use std::f64::consts::PI;
 
 #[derive(Copy, Clone)]
@@ -169,14 +171,14 @@ pub type Colour = Vec3;
 fn linear_to_gamma(x: f64) -> f64 {
     x.sqrt()
 }
-pub fn write_colour(pixel_color: &Vec3, samples_per_pixel: i32) {
+pub fn write_colour(out: &mut impl Write, pixel_color: &Vec3, samples_per_pixel: i32) -> io::Result<()> {
     let scale = 1.0 / samples_per_pixel as f64;
     let r = linear_to_gamma(scale * pixel_color.r());
     let g = linear_to_gamma(scale * pixel_color.g());
     let b = linear_to_gamma(scale * pixel_color.b());
     let intensity = OrderedFloat(0.0)..OrderedFloat(0.999);
     
-    println!("{} {} {}", (256.0 * clamp(r, &intensity)) as i32, (256.0 * clamp(g, &intensity)) as i32, (256.0 * clamp(b, &intensity)) as i32);
+    writeln!(out, "{} {} {}", (256.0 * clamp(r, &intensity)) as i32, (256.0 * clamp(g, &intensity)) as i32, (256.0 * clamp(b, &intensity)) as i32)
 }
 
 pub fn clamp(t: f64, range : &Range<OrderedFloat<f64>>) -> f64 {
@@ -217,24 +219,25 @@ pub struct HitRecord {
     pub normal: Vec3,
     pub t: f64,
     pub front_face: bool,
-    pub material: Rc<dyn Material>,
+    pub material: Arc<dyn Material>,
     pub u : f64,
     pub v : f64
 }
 
 
-pub trait Hittable {
+pub trait Hittable: Send + Sync {
     fn hit(&self, ray: &Ray, range : &Range<OrderedFloat<f64>>) -> Option<HitRecord>;
+    fn bounding_box(&self) -> Aabb;
 }
 
 pub struct Sphere {
     center: Point3,
     radius: f64,
-    material: Rc<dyn Material>
+    material: Arc<dyn Material>
 }
 
 impl Sphere {
-    pub fn new(center: Point3, radius: f64, material: Rc<dyn Material>) -> Self {
+    pub fn new(center: Point3, radius: f64, material: Arc<dyn Material>) -> Self {
         Self { center, radius, material }
     }
 
@@ -252,8 +255,12 @@ impl Sphere {
 }
 
 impl Hittable for Sphere {
-
-    
+    fn bounding_box(&self) -> Aabb {
+        // abs() because a negative radius is used to model hollow glass spheres.
+        let r = self.radius.abs();
+        let rvec = Vec3::new(r, r, r);
+        Aabb::new(self.center - &rvec, self.center + &rvec)
+    }
 
     fn  hit(&self, ray: &Ray, range : &Range<OrderedFloat<f64>>) -> Option<HitRecord> {        
         let oc = ray.origin().clone() - &self.center;
@@ -303,5 +310,11 @@ impl <T> Hittable for Vec<T> where T: Hittable {
             }
         }
         return hit;
+    }
+
+    fn bounding_box(&self) -> Aabb {
+        let mut boxes = self.iter().map(|o| o.bounding_box());
+        let first = boxes.next().expect("bounding box of an empty list");
+        boxes.fold(first, |acc, b| Aabb::surrounding(&acc, &b))
     }
 }
