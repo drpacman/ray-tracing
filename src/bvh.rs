@@ -1,71 +1,62 @@
 use crate::aabb::Aabb;
-use crate::utils::{ HitRecord, Hittable, Ray };
-use ordered_float::OrderedFloat;
-use rand::Rng;
-use std::ops::Range;
-use std::sync::Arc;
+use crate::rng::Rng;
+use crate::utils::Sphere;
 
-// A node in a bounding volume hierarchy: a binary tree where each node's box
-// encloses everything below it, so a ray that misses the box can skip the
-// whole subtree.
+// A bounding volume hierarchy stored as a flat array of nodes rather than a
+// tree of pointers, so it can be copied straight into a GPU buffer.
+// Node 0 is the root.
+//   - Leaf (count > 0): holds spheres[first .. first + count].
+//   - Interior (count == 0): its two children are nodes[first] and nodes[first + 1].
 // See https://raytracing.github.io/books/RayTracingTheNextWeek.html#boundingvolumehierarchies
+#[derive(Copy, Clone)]
+#[repr(C)]
 pub struct BvhNode {
-    left: Arc<dyn Hittable>,
-    right: Arc<dyn Hittable>,
-    bbox: Aabb
+    pub bbox: Aabb,
+    pub first: u32,
+    pub count: u32
 }
 
 impl BvhNode {
-    pub fn from_list<T: Hittable + 'static>(objects: Vec<T>) -> Self {
-        let mut objects: Vec<Arc<dyn Hittable>> = objects
-            .into_iter()
-            .map(|o| Arc::new(o) as Arc<dyn Hittable>)
-            .collect();
-        Self::new(&mut objects)
-    }
-
-    pub fn new(objects: &mut [Arc<dyn Hittable>]) -> Self {
-        assert!(!objects.is_empty(), "cannot build a BVH from an empty list");
-
-        // The simple approach from the book: split along a randomly chosen axis.
-        let axis = rand::thread_rng().gen_range(0..3);
-
-        let (left, right): (Arc<dyn Hittable>, Arc<dyn Hittable>) = match objects.len() {
-            // A single object goes in both children, so every node has two
-            // children and we don't need to check for null.
-            1 => (objects[0].clone(), objects[0].clone()),
-            2 => (objects[0].clone(), objects[1].clone()),
-            n => {
-                objects.sort_by(|a, b| {
-                    a.bounding_box().min[axis].total_cmp(&b.bounding_box().min[axis])
-                });
-                let (lower, upper) = objects.split_at_mut(n / 2);
-                (Arc::new(BvhNode::new(lower)), Arc::new(BvhNode::new(upper)))
-            }
-        };
-
-        let bbox = Aabb::surrounding(&left.bounding_box(), &right.bounding_box());
-        Self { left, right, bbox }
+    pub fn is_leaf(&self) -> bool {
+        self.count > 0
     }
 }
 
-impl Hittable for BvhNode {
-    fn hit(&self, ray: &Ray, range: &Range<OrderedFloat<f64>>) -> Option<HitRecord> {
-        if !self.bbox.hit(ray, range) {
-            return None;
-        }
+// Builds the BVH, reordering `spheres` so that each leaf's spheres are contiguous.
+pub fn build(spheres: &mut [Sphere], rng: &mut Rng) -> Vec<BvhNode> {
+    assert!(!spheres.is_empty(), "cannot build a BVH from an empty list");
+    let placeholder = BvhNode { bbox: spheres[0].bounding_box(), first: 0, count: 0 };
+    let mut nodes = vec![placeholder];
+    subdivide(&mut nodes, 0, spheres, 0, rng);
+    nodes
+}
 
-        let hit_left = self.left.hit(ray, range);
-        // Only accept a right-hand hit if it is closer than the left-hand one.
-        let right_range = match &hit_left {
-            Some(rec) => range.start..OrderedFloat(rec.t),
-            None => range.clone()
-        };
-        let hit_right = self.right.hit(ray, &right_range);
-        hit_right.or(hit_left)
+// Fills in nodes[node_index] for the spheres in `spheres`, which start at
+// index `offset` in the full sphere array.
+fn subdivide(nodes: &mut Vec<BvhNode>, node_index: usize, spheres: &mut [Sphere], offset: usize, rng: &mut Rng) {
+    let bbox = spheres.iter()
+        .map(|s| s.bounding_box())
+        .reduce(|a, b| Aabb::surrounding(&a, &b))
+        .unwrap();
+
+    // The book stops at one or two objects per leaf.
+    if spheres.len() <= 2 {
+        nodes[node_index] = BvhNode { bbox, first: offset as u32, count: spheres.len() as u32 };
+        return;
     }
 
-    fn bounding_box(&self) -> Aabb {
-        self.bbox
-    }
+    // The simple approach from the book: sort along a random axis and split in half.
+    let axis = rng.below(3) as usize;
+    spheres.sort_by(|a, b| a.bounding_box().min[axis].total_cmp(&b.bounding_box().min[axis]));
+    let mid = spheres.len() / 2;
+
+    // Allocate both children next to each other.
+    let left = nodes.len();
+    nodes.push(BvhNode { bbox, first: 0, count: 0 });
+    nodes.push(BvhNode { bbox, first: 0, count: 0 });
+    nodes[node_index] = BvhNode { bbox, first: left as u32, count: 0 };
+
+    let (lower, upper) = spheres.split_at_mut(mid);
+    subdivide(nodes, left, lower, offset, rng);
+    subdivide(nodes, left + 1, upper, offset + mid, rng);
 }

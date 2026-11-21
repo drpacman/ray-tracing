@@ -1,45 +1,43 @@
 use std::ops::{ Div, Add, Mul, Sub, Index };
-use std::ops::Range;
-use std::sync::Arc;
 use std::io::{self, Write};
-use ordered_float::OrderedFloat;
-use rand::Rng;
-use crate::material::Material;
+use std::f32::consts::PI;
 use crate::aabb::Aabb;
-use std::f64::consts::PI;
+use crate::rng::Rng;
 
-#[derive(Copy, Clone)]
+// #[repr(C)] gives a fixed, C-compatible memory layout, ready for copying into GPU buffers.
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
 pub struct Vec3 {
-    e: [f64; 3]
+    e: [f32; 3]
 }
 
 impl Vec3 {
-    pub fn new(e0: f64, e1: f64, e2: f64) -> Self {
+    pub fn new(e0: f32, e1: f32, e2: f32) -> Self {
         Self { e: [e0, e1, e2] }
     }
 
-    pub fn x(&self) -> f64 { self.e[0] }
-    pub fn y(&self) -> f64 { self.e[1] }
-    pub fn z(&self) -> f64 { self.e[2] }
+    pub fn x(&self) -> f32 { self.e[0] }
+    pub fn y(&self) -> f32 { self.e[1] }
+    pub fn z(&self) -> f32 { self.e[2] }
 
-    pub fn r(&self) -> f64 { self.e[0] }
-    pub fn g(&self) -> f64 { self.e[1] }
-    pub fn b(&self) -> f64 { self.e[2] }
+    pub fn r(&self) -> f32 { self.e[0] }
+    pub fn g(&self) -> f32 { self.e[1] }
+    pub fn b(&self) -> f32 { self.e[2] }
 
-    pub fn length(&self) -> f64 {
+    pub fn length(&self) -> f32 {
         self.length_squared().sqrt()
     }
 
-    pub fn length_squared(&self) -> f64 {
+    pub fn length_squared(&self) -> f32 {
         self.e[0] * self.e[0] + self.e[1] * self.e[1] + self.e[2] * self.e[2]
     }
 
     pub fn near_zero(&self) -> bool {
         let s = 1e-8;
         self.e[0].abs() < s && self.e[1].abs() < s && self.e[2].abs() < s
-    } 
-    
-    pub fn dot(&self, rhs: &Self) -> f64 {
+    }
+
+    pub fn dot(&self, rhs: &Self) -> f32 {
         self.e[0] * rhs.e[0] + self.e[1] * rhs.e[1] + self.e[2] * rhs.e[2]
     }
 
@@ -51,62 +49,59 @@ impl Vec3 {
         )
     }
 
+    pub fn min(&self, rhs: &Self) -> Self {
+        Self::new(self.e[0].min(rhs.e[0]), self.e[1].min(rhs.e[1]), self.e[2].min(rhs.e[2]))
+    }
+
+    pub fn max(&self, rhs: &Self) -> Self {
+        Self::new(self.e[0].max(rhs.e[0]), self.e[1].max(rhs.e[1]), self.e[2].max(rhs.e[2]))
+    }
+
     pub fn unit_vector(&self) -> Self {
         self / self.length()
     }
-        
+
     pub fn reflect(&self, normal: &Vec3) -> Self {
         *self - &(*normal * self.dot(normal) * 2.0)
     }
 
     // See https://raytracing.github.io/books/RayTracingInOneWeekend.html#dielectrics/snell'slaw
-    pub fn refract(&self, normal: &Vec3, etai_over_etat: f64) -> Self {
-        let cos_theta = f64::min(1.0, (*self * -1.0).dot(normal));
+    pub fn refract(&self, normal: &Vec3, etai_over_etat: f32) -> Self {
+        let cos_theta = f32::min(1.0, (*self * -1.0).dot(normal));
         let ray_out_perpendicular = (*self + &((*normal * cos_theta))) * etai_over_etat;
-        let ray_out_parallel = *normal * -1.0*f64::abs(1.0 - ray_out_perpendicular.length_squared()).sqrt();
+        let ray_out_parallel = *normal * -1.0*f32::abs(1.0 - ray_out_perpendicular.length_squared()).sqrt();
         ray_out_perpendicular + &ray_out_parallel
     }
 
-    pub fn random() -> Vec3 {
-        Vec3::random_in_range(0.0, 1.0)
+    pub fn random(rng: &mut Rng) -> Vec3 {
+        Vec3::random_in_range(rng, 0.0, 1.0)
     }
-    
-    pub fn random_in_range(min: f64, max:f64) -> Vec3 {
-        let mut rng = rand::thread_rng();
-        Vec3::new(rng.gen_range(min..max), rng.gen_range(min..max), rng.gen_range(min..max))
+
+    pub fn random_in_range(rng: &mut Rng, min: f32, max: f32) -> Vec3 {
+        Vec3::new(rng.range(min, max), rng.range(min, max), rng.range(min, max))
     }
-    
-    pub fn random_in_unit_sphere() -> Vec3 {
+
+    pub fn random_in_unit_sphere(rng: &mut Rng) -> Vec3 {
         loop {
-            let p = Vec3::random_in_range(-1.0, 1.0);
-            if p.length_squared() >= 1.0 {
-                continue;
+            let p = Vec3::random_in_range(rng, -1.0, 1.0);
+            if p.length_squared() < 1.0 {
+                return p;
             }
-            return p;
         }
     }
 
-    pub fn random_unit_vector() -> Vec3 {
-        Self::random_in_unit_sphere().unit_vector()
+    pub fn random_unit_vector(rng: &mut Rng) -> Vec3 {
+        Self::random_in_unit_sphere(rng).unit_vector()
     }
 
-    pub fn random_on_hemisphere(normal: &Vec3) -> Vec3 {
-        let on_unit_sphere = Self::random_unit_vector();
-        if on_unit_sphere.dot(normal) > 0.0 {
-            on_unit_sphere
-        } else {
-            on_unit_sphere * -1.0
-        }
-    }
-
-    pub fn random_in_unit_disk() -> Self {
+    pub fn random_in_unit_disk(rng: &mut Rng) -> Self {
         loop {
-            let p = Vec3::new(rand::thread_rng().gen_range(-1.0..1.0), rand::thread_rng().gen_range(-1.0..1.0), 0.0);
+            let p = Vec3::new(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), 0.0);
             if p.length_squared() < 1.0 {
                 return p
             }
         }
-    }   
+    }
 }
 
 impl Add<&Vec3> for Vec3 {
@@ -125,10 +120,10 @@ impl <'a> Div<&'a Vec3> for &'a Vec3 {
     }
 }
 
-impl Div<f64> for &Vec3 {
+impl Div<f32> for &Vec3 {
     type Output = Vec3;
 
-    fn div(self, rhs: f64) -> Self::Output {
+    fn div(self, rhs: f32) -> Self::Output {
         Vec3::new(self.e[0] / rhs, self.e[1] / rhs, self.e[2] / rhs)
     }
 }
@@ -149,16 +144,16 @@ impl Mul<&Vec3> for Vec3 {
     }
 }
 
-impl Mul<f64> for Vec3 {
+impl Mul<f32> for Vec3 {
     type Output = Self;
 
-    fn mul(self, rhs: f64) -> Self::Output {
+    fn mul(self, rhs: f32) -> Self::Output {
         Self::new(self.e[0] * rhs, self.e[1] * rhs, self.e[2] * rhs)
     }
 }
 
 impl Index<usize> for Vec3 {
-    type Output = f64;
+    type Output = f32;
 
     fn index(&self, idx: usize) -> &Self::Output {
         &self.e[idx]
@@ -168,29 +163,17 @@ impl Index<usize> for Vec3 {
 pub type Point3 = Vec3;
 pub type Colour = Vec3;
 
-fn linear_to_gamma(x: f64) -> f64 {
+fn linear_to_gamma(x: f32) -> f32 {
     x.sqrt()
 }
+
 pub fn write_colour(out: &mut impl Write, pixel_color: &Vec3, samples_per_pixel: i32) -> io::Result<()> {
-    let scale = 1.0 / samples_per_pixel as f64;
-    let r = linear_to_gamma(scale * pixel_color.r());
-    let g = linear_to_gamma(scale * pixel_color.g());
-    let b = linear_to_gamma(scale * pixel_color.b());
-    let intensity = OrderedFloat(0.0)..OrderedFloat(0.999);
-    
-    writeln!(out, "{} {} {}", (256.0 * clamp(r, &intensity)) as i32, (256.0 * clamp(g, &intensity)) as i32, (256.0 * clamp(b, &intensity)) as i32)
+    let scale = 1.0 / samples_per_pixel as f32;
+    let to_byte = |c: f32| (256.0 * linear_to_gamma(scale * c).clamp(0.0, 0.999)) as i32;
+    writeln!(out, "{} {} {}", to_byte(pixel_color.r()), to_byte(pixel_color.g()), to_byte(pixel_color.b()))
 }
 
-pub fn clamp(t: f64, range : &Range<OrderedFloat<f64>>) -> f64 {
-    if t < range.start.into_inner() {
-        range.start.into_inner()
-    } else if t > range.end.into_inner() {
-        range.end.into_inner()
-    } else {
-        t
-    }
-}
-
+#[derive(Copy, Clone)]
 pub struct Ray {
     pub orig: Point3,
     pub dir: Vec3
@@ -201,47 +184,35 @@ impl Ray {
         Self { orig: origin, dir: direction }
     }
 
-    pub fn origin(&self) -> &Point3 {
-        &self.orig
-    }
-
-    pub fn direction(&self) -> &Vec3 {
-        &self.dir
-    }
-
-    pub fn at(&self, t: f64) -> Point3 {
-        self.orig + &( (self.dir * &Vec3::new(t, t, t)))
+    pub fn at(&self, t: f32) -> Point3 {
+        self.orig + &(self.dir * t)
     }
 }
 
 pub struct HitRecord {
     pub p: Point3,
     pub normal: Vec3,
-    pub t: f64,
+    pub t: f32,
     pub front_face: bool,
-    pub material: Arc<dyn Material>,
-    pub u : f64,
-    pub v : f64
+    pub material: u32, // index into Scene::materials
+    pub u : f32,
+    pub v : f32
 }
 
-
-pub trait Hittable: Send + Sync {
-    fn hit(&self, ray: &Ray, range : &Range<OrderedFloat<f64>>) -> Option<HitRecord>;
-    fn bounding_box(&self) -> Aabb;
-}
-
+#[derive(Copy, Clone)]
+#[repr(C)]
 pub struct Sphere {
-    center: Point3,
-    radius: f64,
-    material: Arc<dyn Material>
+    pub center: Point3,
+    pub radius: f32,
+    pub material: u32 // index into Scene::materials
 }
 
 impl Sphere {
-    pub fn new(center: Point3, radius: f64, material: Arc<dyn Material>) -> Self {
+    pub fn new(center: Point3, radius: f32, material: u32) -> Self {
         Self { center, radius, material }
     }
 
-    fn get_sphere_uv(p: &Point3) -> (f64, f64) {
+    fn get_sphere_uv(p: &Point3) -> (f32, f32) {
         // p: a given point on the sphere of radius one, centered at the origin.
         // u: returned value [0,1] of angle around the Y axis from X=-1.
         // v: returned value [0,1] of angle from Y=-1 to Y=+1.
@@ -252,69 +223,51 @@ impl Sphere {
         let phi = (-p.z()).atan2(p.x()) + PI;
         (phi / (2.0*PI), theta/PI)
     }
-}
 
-impl Hittable for Sphere {
-    fn bounding_box(&self) -> Aabb {
+    pub fn bounding_box(&self) -> Aabb {
         // abs() because a negative radius is used to model hollow glass spheres.
         let r = self.radius.abs();
         let rvec = Vec3::new(r, r, r);
         Aabb::new(self.center - &rvec, self.center + &rvec)
     }
 
-    fn  hit(&self, ray: &Ray, range : &Range<OrderedFloat<f64>>) -> Option<HitRecord> {        
-        let oc = ray.origin().clone() - &self.center;
-        let a = ray.direction().dot(ray.direction());
-        let half_b = oc.dot(ray.direction());
-        let c = oc.dot(&oc) - &self.radius * &self.radius;
-        let discriminant = half_b*half_b - a*c;
+    // Returns only the distance t to the nearest hit in [t_min, t_max).
+    // Building the full HitRecord (normal, uv, ...) is deferred until we know
+    // this is the closest object, see hit_record().
+    pub fn intersect(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<f32> {
+        let oc = ray.orig - &self.center;
+        let a = ray.dir.length_squared();
+        let half_b = oc.dot(&ray.dir);
+        // The textbook discriminant half_b² - a·c subtracts two large, nearly
+        // equal numbers for big spheres (the radius-1000 ground), which loses
+        // too much precision in f32. This equivalent form measures the distance
+        // from the centre to the ray's closest point instead.
+        // See Ray Tracing Gems, ch. 7 "Precision Improvements for Ray/Sphere Intersection".
+        let l = oc - &(ray.dir * (half_b / a));
+        let discriminant = a * (self.radius * self.radius - l.length_squared());
         if discriminant < 0.0 {
             return None;
         }
 
         let sqrtd = discriminant.sqrt();
-        let mut root = (-half_b - sqrtd)/a;
-        if !range.contains(&OrderedFloat(root)) {
-            root = (-half_b + sqrtd)/a;
-            if !range.contains(&OrderedFloat(root)) {
+        let mut root = (-half_b - sqrtd) / a;
+        if root < t_min || root >= t_max {
+            root = (-half_b + sqrtd) / a;
+            if root < t_min || root >= t_max {
                 return None;
             }
         }
-        let position = ray.at(root);
+        Some(root)
+    }
+
+    pub fn hit_record(&self, ray: &Ray, t: f32) -> HitRecord {
+        let position = ray.at(t);
         let unit_normal_to_sphere = &(position - &self.center) / self.radius;
         // if angle to the normal is between 90 and and 270, we are on the front face.
         // cos is negative for angles between 90 and 270.
-        let front_face = ray.direction().dot(&unit_normal_to_sphere) < 0.0;
-        let normal = if front_face { unit_normal_to_sphere.clone() } else { unit_normal_to_sphere.clone() * -1.0 };
+        let front_face = ray.dir.dot(&unit_normal_to_sphere) < 0.0;
+        let normal = if front_face { unit_normal_to_sphere } else { unit_normal_to_sphere * -1.0 };
         let (u, v) = Sphere::get_sphere_uv(&unit_normal_to_sphere);
-        Some(HitRecord {
-            t : root,
-            p : position,
-            normal : normal,
-            front_face: front_face,
-            material: self.material.clone(),
-            u,
-            v
-        })
-    }
-}
-
-impl <T> Hittable for Vec<T> where T: Hittable {
-    fn hit(&self, ray: &Ray, range: &Range<OrderedFloat<f64>>) -> Option<HitRecord> {
-        let mut shortest_range = range.clone();
-        let mut hit = None;
-        for object in self.into_iter() {
-            if let Some(rec) = object.hit(ray, &shortest_range) {
-                shortest_range = shortest_range.start..OrderedFloat(rec.t);
-                hit = Some(rec);
-            }
-        }
-        return hit;
-    }
-
-    fn bounding_box(&self) -> Aabb {
-        let mut boxes = self.iter().map(|o| o.bounding_box());
-        let first = boxes.next().expect("bounding box of an empty list");
-        boxes.fold(first, |acc, b| Aabb::surrounding(&acc, &b))
+        HitRecord { t, p: position, normal, front_face, material: self.material, u, v }
     }
 }
