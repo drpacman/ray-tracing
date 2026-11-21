@@ -127,11 +127,20 @@ fn earth(_rng: &mut Rng) -> (Scene, CameraOpts) {
     (scene, camera_opts)
 }
 
+// Samples per pixel in each GPU dispatch. Keep each dispatch short (well under
+// a second) so macOS doesn't kill it as a hung GPU job.
+const SAMPLES_PER_GPU_PASS: u32 = 10;
+
 fn main() {
     // A fixed seed makes the scene (and BVH) the same on every run.
     let mut rng = Rng::new(42);
     let (mut scene, camera_opts) = random_spheres(&mut rng);
     scene.build_bvh(&mut rng);
     let camera = Camera::initialize(camera_opts);
-    camera.render(&scene);
+    // GPU by default; pass --cpu to render with the CPU path instead.
+    if std::env::args().any(|arg| arg == "--cpu") {
+        camera.render(&scene);
+    } else {
+        camera.render_gpu(&scene, SAMPLES_PER_GPU_PASS);
+    }
 }

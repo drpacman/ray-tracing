@@ -19,17 +19,17 @@ pub struct CameraOpts {
 }
 
 pub struct Camera {
-    samples_per_pixel: i32,
-    max_depth: u8,
-    image_width : i32,
-    image_height: i32,
-    camera_center: Vec3,
-    pixel_delta_u: Vec3,
-    pixel_delta_v: Vec3,
-    pixel00_location: Vec3,
-    defocus_disk_u: Vec3,
-    defocus_disk_v: Vec3,
-    defocus_angle: f32
+    pub(crate) samples_per_pixel: i32,
+    pub(crate) max_depth: u8,
+    pub(crate) image_width : i32,
+    pub(crate) image_height: i32,
+    pub(crate) camera_center: Vec3,
+    pub(crate) pixel_delta_u: Vec3,
+    pub(crate) pixel_delta_v: Vec3,
+    pub(crate) pixel00_location: Vec3,
+    pub(crate) defocus_disk_u: Vec3,
+    pub(crate) defocus_disk_v: Vec3,
+    pub(crate) defocus_angle: f32
 }
 
 fn degrees_to_radians(degrees: f32) -> f32 {
@@ -38,7 +38,14 @@ fn degrees_to_radians(degrees: f32) -> f32 {
 
 impl Camera {
 
+    // Renders on the CPU and writes a PPM to stdout.
     pub fn render(&self, scene: &Scene) {
+        let pixels = self.render_pixels(scene);
+        self.write_ppm(&pixels);
+    }
+
+    // Returns the sum of all samples for each pixel, row by row.
+    fn render_pixels(&self, scene: &Scene) -> Vec<Colour> {
         // Render scanlines in parallel across all cores. Rayon's collect()
         // preserves order, so rows come back top-to-bottom.
         let rows_done = AtomicUsize::new(0);
@@ -64,12 +71,15 @@ impl Camera {
             })
             .collect();
         eprintln!("\rDone.                     ");
+        rows.into_iter().flatten().collect()
+    }
 
-        // Write the image once, through a buffered, locked stdout.
+    // Writes summed pixel colours as a PPM to stdout, through a buffered, locked stdout.
+    pub(crate) fn write_ppm(&self, pixels: &[Colour]) {
         let stdout = io::stdout();
         let mut out = BufWriter::new(stdout.lock());
         writeln!(out, "P3\n{} {}\n255", self.image_width, self.image_height).unwrap();
-        for pixel_colour in rows.iter().flatten() {
+        for pixel_colour in pixels {
             write_colour(&mut out, pixel_colour, self.samples_per_pixel).unwrap();
         }
         out.flush().unwrap();
